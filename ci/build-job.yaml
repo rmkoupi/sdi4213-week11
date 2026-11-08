@@ -1,0 +1,88 @@
+# The helpdesk image, built IN the cluster. A template, not a manifest:
+# ci/build-image.sh substitutes the __PLACEHOLDERS__ and applies it. Same
+# shape as ufr/ci/build-job.yaml -- one repository (see ci/fetch-source.sh),
+# no sibling clone at build time.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: __NAME__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: helpdesk-cloud-build
+    app.kubernetes.io/version: "__SHA__"
+spec:
+  # No retries -- a failed build is almost always the Dockerfile or an
+  # upstream that moved, and both produce the identical failure three times.
+  backoffLimit: 0
+  # Kept after completion so the log is still readable.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: helpdesk-cloud-build
+    spec:
+      restartPolicy: Never
+      # cr.oupi.local resolves on the NODE, not in a pod -- CoreDNS has never
+      # heard of it. Without this the build pulls its base image fine and
+      # dies at the push with "lookup cr.oupi.local: no such host".
+      hostAliases:
+        - ip: "__NODEIP__"
+          hostnames:
+            - cr.oupi.local
+      initContainers:
+        - name: fetch
+          image: __FETCH_IMAGE__
+          command: ["/bin/sh", "/script/fetch-source.sh"]
+          env:
+            - name: GIT_SHA
+              value: "__SHA__"
+            - name: APP_REPO_URL
+              value: "__APP_REPO_URL__"
+          # REFERENCED, NEVER CONTAINED -- landed by
+          # oupi-ops/scripts/metal/bootstrap-demo-ci.sh, covers the whole
+          # demo org read-only. The workflow that creates this Job cannot
+          # read this Secret itself; its Role covers Jobs/ConfigMaps/logs only.
+          envFrom:
+            - secretRef:
+                name: demo-build-tokens
+          volumeMounts:
+            - name: script
+              mountPath: /script
+            - name: context
+              mountPath: /workspace
+      containers:
+        - name: kaniko
+          image: __KANIKO__
+          args:
+            - --dockerfile=/workspace/Dockerfile
+            - --context=dir:///workspace
+            - --destination=__DEST__
+            # BOTH FLAGS, NOT THE SAME THING: --insecure allows the plain-HTTP
+            # PUSH, --skip-tls-verify covers the registry as a pull source.
+            - --insecure
+            - --skip-tls-verify
+            # Reproducible layer timestamps, so a rebuild of identical content
+            # produces an identical digest.
+            - --reproducible
+            - --compressed-caching=false
+            # The release the page shows; the Dockerfile stamps it into
+            # APP_VERSION and the OCI version label.
+            - --build-arg=VERSION=__VERSION__
+          volumeMounts:
+            - name: context
+              mountPath: /workspace
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              # Generous: pip installs Streamlit and its dependencies into the
+              # image. An OOMKill here would report Failed with an empty log,
+              # so err wide rather than tune tight.
+              memory: __BUILDMEM__
+      volumes:
+        - name: script
+          configMap:
+            name: __NAME__-script
+        - name: context
+          emptyDir: {}

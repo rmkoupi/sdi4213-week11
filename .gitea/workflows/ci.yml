@@ -1,0 +1,62 @@
+name: CI
+
+# The oupi estate's copy of the pipeline. GitHub's is .github/workflows/ci.yml,
+# and each forge reads only its own directory.
+#
+# This repository's home is GitHub (rmkoupi/sdi4213-week11). The estate holds a
+# pull mirror, demo/helpdesk-cloud, and a mirror sync of main runs this
+# workflow. That is the Render "auto-deploy from main" step, done on a private
+# cloud:
+#
+#   quality  the unit tests (as on GitHub, on the estate's own runner)
+#   build    kaniko Job in the cluster, image tag = commit SHA
+#   deploy   PR + merge on demo/helpdesk-deploy: envs/cloud.yaml = SHA
+#   verify   wait for Argo CD, render the page against PostgreSQL, then the
+#            public URL
+#
+# No staging and no promotion: as on Render, a merge to main deploys.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    # `oupi`, never `ubuntu-latest`. Host-mode runner: uv provides Python.
+    runs-on: oupi
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        env:
+          SQLITE_PATH: ":memory:"
+        run: |
+          uv venv -q --python 3.13 .venv
+          uv pip install -q --python .venv/bin/python -r requirements.txt
+          .venv/bin/python -m pytest -q
+
+  build:
+    runs-on: oupi
+    needs: [quality]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image in the cluster
+        run: ./ci/build-image.sh "${GITHUB_SHA}"
+
+  deploy:
+    runs-on: oupi
+    needs: [build]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write the image tag into envs/cloud.yaml
+        run: ./ci/write-deploy-tag.sh "${GITHUB_SHA}"
+        env:
+          DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+
+  verify:
+    runs-on: oupi
+    needs: [deploy]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cloud serves this commit, renders against PostgreSQL, and is public
+        run: ./ci/smoke.sh "${GITHUB_SHA}"
