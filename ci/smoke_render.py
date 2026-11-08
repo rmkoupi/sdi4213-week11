@@ -25,7 +25,10 @@ def main() -> int:
     expect_env = os.environ["EXPECT_ENV"]
     expect_db = os.environ["EXPECT_DB"]
     expect_version = os.environ.get("EXPECT_VERSION", "")
-    app_file = os.environ.get("APP_FILE", "app.py")
+    # Absolute, against the working directory (/app in the image). AppTest
+    # resolves a relative path against the CALLING FILE's directory, which is
+    # the ConfigMap mount /smoke, so a bare "app.py" is "not found" there.
+    app_file = os.path.abspath(os.environ.get("APP_FILE", "app.py"))
 
     at = AppTest.from_file(app_file, default_timeout=30).run()
 
