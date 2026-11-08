@@ -17,7 +17,12 @@ def connection():
     url = os.getenv("DATABASE_URL", "").strip()
     if url.startswith(("postgres://", "postgresql://")):
         import psycopg
-        conn = psycopg.connect(url)
+        from psycopg.rows import dict_row
+
+        # dict_row: psycopg returns tuples by default, and list_tickets() needs
+        # mappings (sqlite3.Row is one). Without this, the first stored ticket
+        # breaks the page with "cannot convert dictionary update sequence".
+        conn = psycopg.connect(url, row_factory=dict_row)
     else:
         path = os.getenv("SQLITE_PATH", "helpdesk.db")
         conn = sqlite3.connect(path)
